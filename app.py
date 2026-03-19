@@ -2,139 +2,102 @@ import streamlit as st
 import pickle
 import numpy as np
 import os
+import pandas as pd
 from PyPDF2 import PdfReader
-from sklearn.exceptions import NotFittedError
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 from src.preprocessing import clean_text
 from src.features import extract_features, extract_features_dict
 
-# 🔥 BASE PATH FIX
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Load model & vectorizer safely
+MODEL_PATH = os.path.join(BASE_DIR, "models/model.pkl")
+VEC_PATH = os.path.join(BASE_DIR, "models/vectorizer.pkl")
+DATA_PATH = os.path.join(BASE_DIR, "data/resumes.csv")
+
+# 🔥 AUTO TRAIN FUNCTION
+def train_model():
+    df = pd.read_csv(DATA_PATH)
+
+    texts = df["text"].astype(str)
+    labels = df["label"]
+
+    cleaned = [clean_text(t) for t in texts]
+
+    vectorizer = TfidfVectorizer(max_features=1500, stop_words='english')
+    X_text = vectorizer.fit_transform(cleaned).toarray()
+
+    X_features = [extract_features(t) for t in cleaned]
+
+    X = np.hstack((X_text, X_features))
+
+    model = RandomForestClassifier(n_estimators=300, random_state=42)
+    model.fit(X, labels)
+
+    pickle.dump(model, open(MODEL_PATH, "wb"))
+    pickle.dump(vectorizer, open(VEC_PATH, "wb"))
+
+    return model, vectorizer
+
+# 🔥 LOAD OR TRAIN
 try:
-    model = pickle.load(open(os.path.join(BASE_DIR, "models/model.pkl"), "rb"))
-    vectorizer = pickle.load(open(os.path.join(BASE_DIR, "models/vectorizer.pkl"), "rb"))
-except Exception as e:
-    st.error("❌ Model files not found or corrupted. Please retrain and upload.")
-    st.stop()
+    model = pickle.load(open(MODEL_PATH, "rb"))
+    vectorizer = pickle.load(open(VEC_PATH, "rb"))
 
-# UI Setup
-st.set_page_config(page_title="Fake Resume Detection", layout="centered")
+    # check fitted
+    if not hasattr(vectorizer, "idf_"):
+        raise Exception("Not fitted")
 
-st.markdown("<h1 style='text-align:center;'>🤖 Fake Resume Detection System</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;'>AI-powered Resume Authenticity Analyzer</p>", unsafe_allow_html=True)
+except:
+    st.warning("⚠️ Training model for first time...")
+    model, vectorizer = train_model()
+    st.success("✅ Model trained successfully!")
 
-uploaded_file = st.file_uploader("📄 Upload Resume (PDF)", type=["pdf"])
+# UI
+st.title("🤖 Fake Resume Detection System")
+
+uploaded_file = st.file_uploader("Upload Resume PDF", type=["pdf"])
 
 text = ""
 
-# Extract text from PDF
 if uploaded_file:
-    try:
-        reader = PdfReader(uploaded_file)
-        for page in reader.pages:
-            t = page.extract_text()
-            if t:
-                text += t
-    except:
-        st.error("❌ Error reading PDF file")
-        st.stop()
+    reader = PdfReader(uploaded_file)
+    for page in reader.pages:
+        text += page.extract_text() or ""
 
-# 🔥 AI Explanation Logic (Improved)
-def explain_resume(text, f, fake_score):
-    reasons = []
-    t = text.lower()
-
-    if fake_score > 0.6:
-        reasons.append("Model detected patterns similar to fake or exaggerated resumes")
-
-    if f["Skill Count"] > 10 and f["Experience Years"] < 2:
-        reasons.append("Too many skills listed compared to low experience")
-
-    if f["Word Count"] < 40:
-        reasons.append("Resume is too short and lacks detailed information")
-
-    if f["Repetition Score"] > 30:
-        reasons.append("High repetition of keywords detected (possible keyword stuffing)")
-
-    if "expert" in t and "month" in t:
-        reasons.append("Unrealistic claim: expert level in very short time")
-
-    if "google" in t and "microsoft" in t:
-        reasons.append("Multiple top companies mentioned — verify authenticity")
-
-    if len(reasons) == 0:
-        reasons.append("Resume content appears consistent and realistic")
-
-    return reasons
-
-# 🔍 ANALYSIS BUTTON
-if st.button("🔍 Analyze Resume"):
+if st.button("Analyze Resume"):
 
     if text.strip() == "":
-        st.warning("⚠️ Please upload a resume first")
+        st.warning("Upload resume first")
     else:
         clean = clean_text(text)
 
-        try:
-            # Vectorization
-            text_vec = vectorizer.transform([clean]).toarray()
-        except NotFittedError:
-            st.error("❌ Model not trained properly. Please retrain the model.")
-            st.stop()
-
-        # Features
+        text_vec = vectorizer.transform([clean]).toarray()
         features = extract_features(clean)
         f_dict = extract_features_dict(clean)
 
-        # Combine
         final_input = np.hstack((text_vec, [features]))
 
-        # Prediction
         proba = model.predict_proba(final_input)[0]
         fake_score = proba[1]
 
-        # 🔥 Stable Threshold
         result = 1 if fake_score > 0.65 else 0
 
-        # RESULT
-        st.subheader("📊 Result")
-
         if result == 1:
-            st.error(f"❌ Fake Resume ({fake_score*100:.2f}% confidence)")
+            st.error(f"❌ Fake Resume ({fake_score*100:.2f}%)")
         else:
-            st.success(f"✅ Real Resume ({(1-fake_score)*100:.2f}% confidence)")
+            st.success(f"✅ Real Resume ({(1-fake_score)*100:.2f}%)")
 
-        # Progress Bar
-        st.subheader("📊 Fake Probability")
         st.progress(int(fake_score * 100))
 
-        # Quality Score
-        st.subheader("⭐ Resume Quality Score")
-        st.write(f"{(1-fake_score)*100:.2f}/100")
+        st.subheader("AI Explanation")
+        if fake_score > 0.6:
+            st.write("Model detected fake-like patterns")
+        else:
+            st.write("Resume looks consistent")
 
-        # Explanation
-        st.subheader("🧠 AI Explanation")
-        reasons = explain_resume(text, f_dict, fake_score)
-        for r in reasons:
-            st.write("•", r)
-
-        # Features
-        st.subheader("⚙️ Extracted Features")
+        st.subheader("Features")
         for k, v in f_dict.items():
             st.write(f"{k}: {v}")
-
-        # Download Report
-        report = f"""
-Result: {'Fake' if result==1 else 'Real'}
-Confidence: {fake_score*100:.2f}%
-
-Reasons:
-{chr(10).join(reasons)}
-"""
-        st.download_button("📄 Download Report", report)
-
-        # Preview
-        st.subheader("📄 Resume Preview")
-        st.write(text[:500])
