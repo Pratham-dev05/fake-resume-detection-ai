@@ -1,5 +1,7 @@
 pandas
 scikit-learn
-streamlit
+streamlit==1.19.0
 PyPDF2
 nltk
+matplotlib
+altair==4.2.2
