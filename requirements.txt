@@ -1,7 +1,9 @@
-pandas
-scikit-learn
 streamlit==1.32.0
-PyPDF2
-nltk
-matplotlib
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+matplotlib==3.8.4
+PyPDF2==3.0.1
+nltk==3.8.1
 altair==4.2.2
+pillow==10.0.1
